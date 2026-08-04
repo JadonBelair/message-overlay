@@ -11,6 +11,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
+const INDEX_HTML: &str = include_str!("../../index.html");
+
 #[derive(Clone)]
 struct AppState {
     tx: broadcast::Sender<String>,
@@ -34,23 +36,7 @@ async fn main() {
 }
 
 async fn root() -> Html<&'static str> {
-    Html(
-        r#"
-        <!doctype html>
-        <html>
-            <head>
-                <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js" integrity="sha384-H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V" crossorigin="anonymous"></script>
-            </head>
-            <body>
-                <form hx-post="/" hx-swap="none" hx-on::after-request="if (event.detail.successful) { this.elements['msg'].value = ''; this.elements['msg'].focus(); }">
-                    <input type="text" name="msg" placeholder="Say something", required>
-                    <input type="text" name="name" placeholder="Sign here" required>
-                    <input type="submit" value="Send!">
-                </form>
-            </body>
-        </html>
-        "#,
-    )
+    Html(INDEX_HTML)
 }
 
 #[derive(Deserialize, Serialize)]
