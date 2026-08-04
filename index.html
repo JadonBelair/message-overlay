@@ -4,7 +4,7 @@
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js" integrity="sha384-H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V" crossorigin="anonymous"></script>
-		<style>
+        <style>
             :root {
                 --bg: #0f172a;
                 --card-bg: #1e293b;
@@ -48,9 +48,22 @@
                 gap: 1.25rem;
             }
 
-            input[type="text"] {
+            .field-group {
+                display: flex;
+                flex-direction: column;
+                gap: 0.5rem;
+            }
+
+            label {
+                font-size: 0.85rem;
+                color: var(--placeholder);
+                font-weight: 500;
+            }
+
+            /* Shared base input styles */
+            input[type="text"],
+            input[type="color"] {
                 width: 100%;
-                padding: 0.75rem 1rem;
                 font-size: 0.95rem;
                 background-color: var(--input-bg);
                 color: var(--text);
@@ -60,13 +73,39 @@
                 transition: border-color 0.2s ease, box-shadow 0.2s ease;
             }
 
+            input[type="text"] {
+                padding: 0.75rem 1rem;
+            }
+
             input[type="text"]::placeholder {
                 color: var(--placeholder);
             }
 
-            input[type="text"]:focus {
+            input[type="text"]:focus,
+            input[type="color"]:focus {
                 border-color: var(--focus-ring);
                 box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.2);
+            }
+
+            /* Custom Color Picker Adjustments */
+            input[type="color"] {
+                height: 46px;
+                padding: 4px;
+                cursor: pointer;
+            }
+
+            input[type="color"]::-webkit-color-swatch-wrapper {
+                padding: 0;
+            }
+
+            input[type="color"]::-webkit-color-swatch {
+                border: none;
+                border-radius: 6px;
+            }
+
+            input[type="color"]::-moz-color-swatch {
+                border: none;
+                border-radius: 6px;
             }
 
             input[type="submit"] {
@@ -94,6 +133,12 @@
         <form hx-post="/" hx-swap="none" hx-on::after-request="if (event.detail.successful) { this.elements['msg'].value = ''; this.elements['msg'].focus(); }">
             <input type="text" name="msg" placeholder="Say something" required>
             <input type="text" name="name" placeholder="Sign here" required>
+            
+            <div class="field-group">
+                <label for="color">Choose a color</label>
+                <input type="color" id="color" name="color" value="#00ffcc" title="Choose a color">
+            </div>
+
             <input type="submit" value="Send!">
         </form>
     </body>

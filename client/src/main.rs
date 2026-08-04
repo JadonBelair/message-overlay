@@ -3,7 +3,7 @@ use std::{cell::RefCell, rc::Rc, time::Duration};
 use futures_util::StreamExt;
 use gtk4::{
     cairo::Region,
-    gdk::{self, prelude::SurfaceExt},
+    gdk::{self, prelude::SurfaceExt, RGBA},
     gio::prelude::{ApplicationExt, ApplicationExtManual},
     glib,
     prelude::{DrawingAreaExtManual, GtkWindowExt, NativeExt, WidgetExt, WidgetExtManual},
@@ -33,6 +33,7 @@ const SIGN_OFFS: &[&'static str] = &[
 
 struct ScrollingMessage {
     text: String,
+    color: String,
     current_x: f64,
     current_y: f64,
     width: f64,
@@ -42,9 +43,10 @@ struct ScrollingMessage {
 struct WebSocketMessage {
     name: String,
     msg: String,
+    color: String,
 }
 
-fn activate(application: &gtk4::Application, mut rx: UnboundedReceiver<String>) {
+fn activate(application: &gtk4::Application, mut rx: UnboundedReceiver<WebSocketMessage>) {
     let window = gtk4::ApplicationWindow::new(application);
 
     window.init_layer_shell();
@@ -79,7 +81,7 @@ fn activate(application: &gtk4::Application, mut rx: UnboundedReceiver<String>) 
 
     let active_messages_spawn = active_messages.clone();
     let drawing_spawn = drawing_box.clone();
-    let spawn_new_message = move |text: &str| {
+    let spawn_new_message = move |msg: WebSocketMessage| {
         let window_width = drawing_spawn.width() as f64;
         let window_height = drawing_spawn.height() as f64;
 
@@ -87,14 +89,27 @@ fn activate(application: &gtk4::Application, mut rx: UnboundedReceiver<String>) 
         // will be enough for both the message and the sign off
         let spawn_y = rand::random_range(10.0..(window_height - (FONT_SIZE as f64 * 2.0) - 10.0));
 
-        active_messages_spawn.borrow_mut().push(ScrollingMessage {
-            text: text.to_string(),
-            current_x: window_width,
-            current_y: spawn_y,
+        let sign_off = format!(
+            "{}, {}",
+            SIGN_OFFS.choose(&mut rand::rng()).unwrap(),
+            msg.name
+        );
 
+        let msg_len = if sign_off.len() > msg.msg.len() {
+            sign_off.len()
+        } else {
+            msg.msg.len()
+        } as i32;
+
+        active_messages_spawn.borrow_mut().push(ScrollingMessage {
             // also assuming that the font size will be enough
             // for the width, with a small bit of padding
-            width: (text.len() as i32 * FONT_SIZE + 10) as f64,
+            width: (msg_len * FONT_SIZE + 10) as f64,
+
+            text: format!("{}\n{}", msg.msg, sign_off),
+            color: msg.color,
+            current_x: window_width,
+            current_y: spawn_y,
         });
     };
 
@@ -121,12 +136,25 @@ fn activate(application: &gtk4::Application, mut rx: UnboundedReceiver<String>) 
 
             pangocairo::functions::layout_path(cr, &layout);
 
-            cr.set_source_rgb(0.0, 0.0, 0.0);
+            let text_color = RGBA::parse(&active_message.color).unwrap();
+
+            // uses the colors luminance to determine best contrast outline color
+            let outline_shade = 1.0
+                - (0.2126 * text_color.red()
+                    + 0.7152 * text_color.green()
+                    + 0.0722 * text_color.blue()) as f64;
+
+            cr.set_source_rgb(outline_shade, outline_shade, outline_shade);
+
             cr.set_line_width(5.0);
             cr.set_line_join(gdk::cairo::LineJoin::Round);
             cr.stroke_preserve().unwrap();
 
-            cr.set_source_rgb(0.0, 1.0, 0.8);
+            cr.set_source_rgb(
+                text_color.red() as f64,
+                text_color.green() as f64,
+                text_color.blue() as f64,
+            );
             cr.fill().unwrap();
         }
     });
@@ -161,7 +189,7 @@ fn activate(application: &gtk4::Application, mut rx: UnboundedReceiver<String>) 
 
     glib::MainContext::default().spawn_local(async move {
         while let Some(msg) = rx.recv().await {
-            spawn_new_message(&msg);
+            spawn_new_message(msg);
         }
     });
 
@@ -176,7 +204,7 @@ fn activate(application: &gtk4::Application, mut rx: UnboundedReceiver<String>) 
     window.show();
 }
 
-fn spawn_websocket_client_thread(tx: UnboundedSender<String>) {
+fn spawn_websocket_client_thread(tx: UnboundedSender<WebSocketMessage>) {
     std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
 
@@ -202,12 +230,7 @@ fn spawn_websocket_client_thread(tx: UnboundedSender<String>) {
                                 Ok(Message::Text(text)) => {
                                     match serde_json::from_str::<WebSocketMessage>(&text) {
                                         Ok(msg) => {
-                                            let _ = tx.send(format!(
-                                                "{}\n{}, {}",
-                                                msg.msg,
-                                                SIGN_OFFS.choose(&mut rand::rng()).unwrap(),
-                                                msg.name
-                                            ));
+                                            let _ = tx.send(msg);
                                         }
                                         Err(_) => {
                                             eprintln!("Received invalid text: {text}");
@@ -243,7 +266,7 @@ fn spawn_websocket_client_thread(tx: UnboundedSender<String>) {
 fn main() {
     let application = gtk4::Application::new(Some("jadon.message-overlay"), Default::default());
 
-    let (tx, rx) = mpsc::unbounded_channel::<String>();
+    let (tx, rx) = mpsc::unbounded_channel::<WebSocketMessage>();
 
     // shenanigans needed to pass the receiver to the application
     let rx = Rc::new(RefCell::new(Some(rx)));
