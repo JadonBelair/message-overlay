@@ -12,7 +12,7 @@ use axum::{
 };
 use tokio::sync::broadcast;
 
-const INDEX_HTML: &str = include_str!("../../index.html");
+const INDEX_HTML: &str = include_str!("../index.html");
 
 #[derive(Clone)]
 struct AppState {
