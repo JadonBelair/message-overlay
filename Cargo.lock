@@ -159,6 +159,7 @@ dependencies = [
 name = "client"
 version = "0.1.0"
 dependencies = [
+ "common",
  "futures-util",
  "gtk4",
  "gtk4-layer-shell",
@@ -168,6 +169,13 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-tungstenite 0.30.0",
+]
+
+[[package]]
+name = "common"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -1159,6 +1167,7 @@ name = "server"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "common",
  "serde",
  "serde_json",
  "tokio",

@@ -1,3 +1,5 @@
+use common::WebSocketMessage as Input;
+
 use axum::{
     extract::{
         ws::{Message, WebSocket},
@@ -8,7 +10,6 @@ use axum::{
     routing::get,
     Router,
 };
-use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
 const INDEX_HTML: &str = include_str!("../../index.html");
@@ -39,16 +40,9 @@ async fn root() -> Html<&'static str> {
     Html(INDEX_HTML)
 }
 
-#[derive(Deserialize, Serialize)]
-struct Input {
-    name: String,
-    msg: String,
-    color: String,
-}
-
 async fn accept_form(State(state): State<AppState>, Form(input): Form<Input>) -> impl IntoResponse {
     println!(
-        "{} say \"{}\" with hexcode {}",
+        "{} says \"{}\" with hexcode {}",
         input.name, input.msg, input.color
     );
 

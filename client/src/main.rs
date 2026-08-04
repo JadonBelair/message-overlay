@@ -1,5 +1,7 @@
 use std::{cell::RefCell, rc::Rc, time::Duration};
 
+use common::WebSocketMessage;
+
 use futures_util::StreamExt;
 use gtk4::{
     cairo::Region,
@@ -11,7 +13,6 @@ use gtk4::{
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use rand::seq::IndexedRandom;
-use serde::{Deserialize, Serialize};
 use tokio::{
     sync::mpsc::{self, UnboundedReceiver, UnboundedSender},
     time::sleep,
@@ -37,13 +38,6 @@ struct ScrollingMessage {
     current_x: f64,
     current_y: f64,
     width: f64,
-}
-
-#[derive(Serialize, Deserialize)]
-struct WebSocketMessage {
-    name: String,
-    msg: String,
-    color: String,
 }
 
 fn activate(application: &gtk4::Application, mut rx: UnboundedReceiver<WebSocketMessage>) {
