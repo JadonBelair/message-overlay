@@ -20,7 +20,6 @@ use tokio::{
 use tokio_tungstenite::tungstenite::protocol::Message;
 
 const SCROLL_SPEED: f64 = 150.0;
-const FONT_SIZE: i32 = 24;
 
 const SIGN_OFFS: &[&'static str] = &[
     "Sincerely",
@@ -35,6 +34,7 @@ const SIGN_OFFS: &[&'static str] = &[
 struct ScrollingMessage {
     text: String,
     color: String,
+    font_size: i32,
     current_x: f64,
     current_y: f64,
     width: f64,
@@ -81,7 +81,8 @@ fn activate(application: &gtk4::Application, mut rx: UnboundedReceiver<WebSocket
 
         // im just making an assumption that 2x the font size
         // will be enough for both the message and the sign off
-        let spawn_y = rand::random_range(10.0..(window_height - (FONT_SIZE as f64 * 2.0) - 10.0));
+        let spawn_y =
+            rand::random_range(10.0..(window_height - (msg.font_size as f64 * 2.0) - 10.0));
 
         let sign_off = format!(
             "{}, {}",
@@ -98,10 +99,12 @@ fn activate(application: &gtk4::Application, mut rx: UnboundedReceiver<WebSocket
         active_messages_spawn.borrow_mut().push(ScrollingMessage {
             // also assuming that the font size will be enough
             // for the width, with a small bit of padding
-            width: (msg_len * FONT_SIZE + 10) as f64,
+            width: (msg_len * msg.font_size + 10) as f64,
 
             text: format!("{}\n{}", msg.msg, sign_off),
             color: msg.color,
+            font_size: msg.font_size,
+
             current_x: window_width,
             current_y: spawn_y,
         });
@@ -121,8 +124,10 @@ fn activate(application: &gtk4::Application, mut rx: UnboundedReceiver<WebSocket
         for active_message in active_messages.iter() {
             layout.set_text(&active_message.text);
 
-            let font_desc =
-                gdk::pango::FontDescription::from_string(&format!("Sans Bold {FONT_SIZE}"));
+            let font_desc = gdk::pango::FontDescription::from_string(&format!(
+                "Sans Bold {}",
+                active_message.font_size
+            ));
             layout.set_font_description(Some(&font_desc));
             layout.set_alignment(gdk::pango::Alignment::Right);
 
@@ -140,7 +145,7 @@ fn activate(application: &gtk4::Application, mut rx: UnboundedReceiver<WebSocket
 
             cr.set_source_rgb(outline_shade, outline_shade, outline_shade);
 
-            cr.set_line_width(5.0);
+            cr.set_line_width(2.0);
             cr.set_line_join(gdk::cairo::LineJoin::Round);
             cr.stroke_preserve().unwrap();
 
