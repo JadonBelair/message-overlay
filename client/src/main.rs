@@ -6,19 +6,33 @@ use gtk4::{
     gdk::{self, prelude::SurfaceExt},
     gio::prelude::{ApplicationExt, ApplicationExtManual},
     glib,
-    prelude::{FixedExt, GtkWindowExt, NativeExt, WidgetExt, WidgetExtManual},
-    style_context_add_provider_for_display, CssProvider, Fixed, Label, Orientation, Overflow,
+    prelude::{DrawingAreaExtManual, GtkWindowExt, NativeExt, WidgetExt, WidgetExtManual},
+    style_context_add_provider_for_display, CssProvider, DrawingArea,
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
+use rand::seq::IndexedRandom;
 use serde::{Deserialize, Serialize};
-use tokio::{sync::mpsc, time::sleep};
+use tokio::{
+    sync::mpsc::{self, UnboundedReceiver, UnboundedSender},
+    time::sleep,
+};
 use tokio_tungstenite::tungstenite::protocol::Message;
 
 const SCROLL_SPEED: f64 = 150.0;
 const FONT_SIZE: i32 = 24;
 
+const SIGN_OFFS: &[&'static str] = &[
+    "Sincerely",
+    "Yours truly",
+    "Best wishes",
+    "Love",
+    "Respectfully",
+    "Cheers",
+    "Kind regards",
+];
+
 struct ScrollingMessage {
-    label: Label,
+    text: String,
     current_x: f64,
     current_y: f64,
     width: f64,
@@ -30,11 +44,10 @@ struct WebSocketMessage {
     msg: String,
 }
 
-fn activate(application: &gtk4::Application) {
+fn activate(application: &gtk4::Application, mut rx: UnboundedReceiver<String>) {
     let window = gtk4::ApplicationWindow::new(application);
 
     window.init_layer_shell();
-
     window.set_layer(Layer::Overlay);
 
     window.set_keyboard_mode(KeyboardMode::None);
@@ -44,33 +57,16 @@ fn activate(application: &gtk4::Application) {
     window.set_anchor(Edge::Left, true);
     window.set_anchor(Edge::Right, true);
 
-    let outer_box = Fixed::new();
-    outer_box.set_overflow(Overflow::Hidden);
-    outer_box.add_css_class("message-container");
-
-    window.set_child(Some(&outer_box));
+    let drawing_box = DrawingArea::new();
+    window.set_child(Some(&drawing_box));
 
     let provider = CssProvider::new();
     provider.load_from_data(
-        format!(
-            "
-        window {{
-            background-color: transparent;
-        }}
-
-        .message-text {{
-            color: #00FFCC;
-            text-shadow: 
-                -2px -2px 0 #000,
-                 2px -2px 0 #000,
-                -2px  2px 0 #000,
-                 2px  2px 0 #000;
-            font-size: {FONT_SIZE}px;
-            font-weight: bold;
-        }}
         "
-        )
-        .as_str(),
+        window {
+            background-color: transparent;
+        }
+        ",
     );
 
     style_context_add_provider_for_display(
@@ -80,36 +76,64 @@ fn activate(application: &gtk4::Application) {
     );
 
     let active_messages = Rc::new(RefCell::new(Vec::<ScrollingMessage>::new()));
-    let active_messages_spawm = active_messages.clone();
-    let fixed_spawn = outer_box.clone();
 
+    let active_messages_spawn = active_messages.clone();
+    let drawing_spawn = drawing_box.clone();
     let spawn_new_message = move |text: &str| {
-        let label = Label::new(Some(text));
-        label.add_css_class("message-text");
+        let window_width = drawing_spawn.width() as f64;
+        let window_height = drawing_spawn.height() as f64;
 
-        fixed_spawn.put(&label, 0.0, 0.0);
-        let (_, label_width, _, _) = label.measure(Orientation::Horizontal, -1);
+        // im just making an assumption that 2x the font size
+        // will be enough for both the message and the sign off
+        let spawn_y = rand::random_range(10.0..(window_height - (FONT_SIZE as f64 * 2.0) - 10.0));
 
-        let window_width = 1920.0 * 2.0;
-        let window_height = 1080.0;
-
-        let spawn_y = rand::random_range(0.0..(window_height - FONT_SIZE as f64));
-
-        active_messages_spawm.borrow_mut().push(ScrollingMessage {
-            label: label.clone(),
+        active_messages_spawn.borrow_mut().push(ScrollingMessage {
+            text: text.to_string(),
             current_x: window_width,
             current_y: spawn_y,
-            width: label_width as f64,
-        });
 
-        fixed_spawn.move_(&label, window_width, spawn_y);
+            // also assuming that the font size will be enough
+            // for the width, with a small bit of padding
+            width: (text.len() as i32 * FONT_SIZE + 10) as f64,
+        });
     };
 
-    let active_messages_tick = active_messages.clone();
-    let fixed_tick = outer_box.clone();
-    let last_frame_time = Rc::new(RefCell::new(Option::<i64>::None));
+    let active_messages_draw = active_messages.clone();
+    drawing_box.set_draw_func(move |_area, cr, width, height| {
+        cr.rectangle(0.0, 0.0, width as f64, height as f64);
+        cr.clip();
 
-    outer_box.add_tick_callback(move |_, frame_clock| {
+        cr.set_source_rgba(0.0, 0.0, 0.0, 0.0);
+        cr.paint().unwrap();
+
+        let layout = pangocairo::functions::create_layout(cr);
+
+        let active_messages = active_messages_draw.borrow();
+        for active_message in active_messages.iter() {
+            layout.set_text(&active_message.text);
+
+            let font_desc =
+                gdk::pango::FontDescription::from_string(&format!("Sans Bold {FONT_SIZE}"));
+            layout.set_font_description(Some(&font_desc));
+            layout.set_alignment(gdk::pango::Alignment::Right);
+
+            cr.move_to(active_message.current_x, active_message.current_y);
+
+            pangocairo::functions::layout_path(cr, &layout);
+
+            cr.set_source_rgb(0.0, 0.0, 0.0);
+            cr.set_line_width(5.0);
+            cr.set_line_join(gdk::cairo::LineJoin::Round);
+            cr.stroke_preserve().unwrap();
+
+            cr.set_source_rgb(0.0, 1.0, 0.8);
+            cr.fill().unwrap();
+        }
+    });
+
+    let active_messages_tick = active_messages.clone();
+    let last_frame_time = Rc::new(RefCell::new(Option::<i64>::None));
+    drawing_box.add_tick_callback(move |area, frame_clock| {
         let frame_time = frame_clock.frame_time();
 
         if let Some(prev_time) = *last_frame_time.borrow() {
@@ -122,28 +146,37 @@ fn activate(application: &gtk4::Application) {
                 msg.current_x -= pixels_to_move;
 
                 if msg.current_x < -msg.width {
-                    fixed_tick.remove(&msg.label);
                     false
                 } else {
-                    fixed_tick.move_(&msg.label, msg.current_x, msg.current_y);
                     true
                 }
             });
         }
 
+        area.queue_draw();
+
         *last_frame_time.borrow_mut() = Some(frame_time);
         gdk::glib::ControlFlow::Continue
     });
 
-    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-
-    let spawn_handle = spawn_new_message.clone();
     glib::MainContext::default().spawn_local(async move {
         while let Some(msg) = rx.recv().await {
-            spawn_handle(&msg);
+            spawn_new_message(&msg);
         }
     });
 
+    // this gives us mouse passthrough
+    window.connect_realize(|win| {
+        if let Some(surface) = win.surface() {
+            let empty_region = Region::create();
+            surface.set_input_region(Some(&empty_region));
+        }
+    });
+
+    window.show();
+}
+
+fn spawn_websocket_client_thread(tx: UnboundedSender<String>) {
     std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
 
@@ -169,7 +202,12 @@ fn activate(application: &gtk4::Application) {
                                 Ok(Message::Text(text)) => {
                                     match serde_json::from_str::<WebSocketMessage>(&text) {
                                         Ok(msg) => {
-                                            let _ = tx.send(format!("{}: {}", msg.name, msg.msg));
+                                            let _ = tx.send(format!(
+                                                "{}\n{}, {}",
+                                                msg.msg,
+                                                SIGN_OFFS.choose(&mut rand::rng()).unwrap(),
+                                                msg.name
+                                            ));
                                         }
                                         Err(_) => {
                                             eprintln!("Received invalid text: {text}");
@@ -200,24 +238,23 @@ fn activate(application: &gtk4::Application) {
             }
         });
     });
-
-    // this gives us mouse passthrough
-    window.connect_realize(|win| {
-        if let Some(surface) = win.surface() {
-            let empty_region = Region::create();
-            surface.set_input_region(Some(&empty_region));
-        }
-    });
-
-    window.show();
 }
 
 fn main() {
     let application = gtk4::Application::new(Some("jadon.message-overlay"), Default::default());
 
-    application.connect_activate(|app| {
-        activate(app);
+    let (tx, rx) = mpsc::unbounded_channel::<String>();
+
+    // shenanigans needed to pass the receiver to the application
+    let rx = Rc::new(RefCell::new(Some(rx)));
+
+    application.connect_activate(move |app| {
+        if let Some(rx) = rx.borrow_mut().take() {
+            activate(app, rx);
+        }
     });
+
+    spawn_websocket_client_thread(tx);
 
     application.run();
 }
