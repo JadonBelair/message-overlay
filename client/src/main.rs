@@ -77,106 +77,121 @@ fn activate(application: &gtk4::Application, mut rx: UnboundedReceiver<WebSocket
 
     let active_messages = Rc::new(RefCell::new(Vec::<ScrollingMessage>::new()));
 
-    let active_messages_spawn = active_messages.clone();
-    let drawing_spawn = drawing_box.clone();
-    let spawn_new_message = move |msg: WebSocketMessage| {
-        let window_width = drawing_spawn.width() as f64;
-        let window_height = drawing_spawn.height() as f64;
+    let spawn_new_message = glib::clone!(
+        #[strong]
+        active_messages,
+        #[strong]
+        drawing_box,
+        move |msg: WebSocketMessage| {
+            let window_width = drawing_box.width() as f64;
+            let window_height = drawing_box.height() as f64;
 
-        let font_desc =
-            gdk::pango::FontDescription::from_string(&format!("Sans Bold {}", msg.font_size));
+            let font_desc =
+                gdk::pango::FontDescription::from_string(&format!("Sans Bold {}", msg.font_size));
 
-        let color = RGBA::parse(msg.color).unwrap_or(RGBA::BLACK);
+            let color = RGBA::parse(msg.color).unwrap_or(RGBA::BLACK);
 
-        let outline_shade =
-            1.0 - (0.2126 * color.red() + 0.7152 * color.green() + 0.0722 * color.blue()) as f32;
+            let outline_shade = 1.0
+                - (0.2126 * color.red() + 0.7152 * color.green() + 0.0722 * color.blue()) as f32;
 
-        let outline_color = RGBA::new(outline_shade, outline_shade, outline_shade, 1.0);
+            let outline_color = RGBA::new(outline_shade, outline_shade, outline_shade, 1.0);
 
-        let text = format!(
-            "{}\n{}, {}",
-            msg.msg,
-            SIGN_OFFS.choose(&mut rand::rng()).unwrap(),
-            msg.name
-        );
+            let text = format!(
+                "{}\n{}, {}",
+                msg.msg,
+                SIGN_OFFS.choose(&mut rand::rng()).unwrap(),
+                msg.name
+            );
 
-        let pango_ctx = drawing_spawn.pango_context();
-        let layout = gdk::pango::Layout::new(&pango_ctx);
-        layout.set_text(&text);
-        layout.set_font_description(Some(&font_desc));
+            let pango_ctx = drawing_box.pango_context();
+            let layout = gdk::pango::Layout::new(&pango_ctx);
+            layout.set_text(&text);
+            layout.set_font_description(Some(&font_desc));
 
-        let (width, height) = layout.pixel_size();
-        let spawn_y = rand::random_range(10.0..(window_height - height as f64 - 10.0));
+            let (width, height) = layout.pixel_size();
+            let spawn_y = rand::random_range(10.0..(window_height - height as f64 - 10.0));
 
-        active_messages_spawn.borrow_mut().push(ScrollingMessage {
-            text,
-            color,
-            outline_color,
-            font_desc,
+            active_messages.borrow_mut().push(ScrollingMessage {
+                text,
+                color,
+                outline_color,
+                font_desc,
 
-            current_x: window_width,
-            current_y: spawn_y,
-            speed: msg.speed as f64,
+                current_x: window_width,
+                current_y: spawn_y,
+                speed: msg.speed as f64,
 
-            width: width as f64,
-        });
-    };
-
-    let active_messages_draw = active_messages.clone();
-    drawing_box.set_draw_func(move |_area, cr, width, height| {
-        cr.rectangle(0.0, 0.0, width as f64, height as f64);
-        cr.clip();
-
-        cr.set_source_rgba(0.0, 0.0, 0.0, 0.0);
-        cr.paint().unwrap();
-
-        let layout = pangocairo::functions::create_layout(cr);
-        layout.set_alignment(gdk::pango::Alignment::Right);
-
-        let active_messages = active_messages_draw.borrow();
-        for active_message in active_messages.iter() {
-            layout.set_text(&active_message.text);
-            layout.set_font_description(Some(&active_message.font_desc));
-
-            cr.move_to(active_message.current_x, active_message.current_y);
-            pangocairo::functions::layout_path(cr, &layout);
-
-            cr.set_source_color(&active_message.outline_color);
-
-            cr.set_line_width(2.0);
-            cr.set_line_join(gdk::cairo::LineJoin::Round);
-            cr.stroke_preserve().unwrap();
-
-            cr.set_source_color(&active_message.color);
-            cr.fill().unwrap();
-        }
-    });
-
-    let active_messages_tick = active_messages.clone();
-    let last_frame_time = Rc::new(RefCell::new(Option::<i64>::None));
-    drawing_box.add_tick_callback(move |area, frame_clock| {
-        let frame_time = frame_clock.frame_time();
-
-        if let Some(prev_time) = *last_frame_time.borrow() {
-            let delta_seconds = (frame_time - prev_time) as f64 / 1000000.0;
-
-            let mut msgs = active_messages_tick.borrow_mut();
-            msgs.retain_mut(|msg| {
-                let pixels_to_move = msg.speed * delta_seconds;
-                msg.current_x -= pixels_to_move;
-                if msg.current_x < -msg.width {
-                    false
-                } else {
-                    true
-                }
+                width: width as f64,
             });
         }
+    );
 
-        area.queue_draw();
+    drawing_box.set_draw_func(glib::clone!(
+        #[strong]
+        active_messages,
+        move |_area, cr, width, height| {
+            cr.rectangle(0.0, 0.0, width as f64, height as f64);
+            cr.clip();
 
-        *last_frame_time.borrow_mut() = Some(frame_time);
-        gdk::glib::ControlFlow::Continue
-    });
+            cr.set_source_rgba(0.0, 0.0, 0.0, 0.0);
+
+            cr.set_operator(gdk::cairo::Operator::Clear);
+            cr.paint().unwrap();
+            cr.set_operator(gdk::cairo::Operator::Over);
+
+            let layout = pangocairo::functions::create_layout(cr);
+            layout.set_alignment(gdk::pango::Alignment::Right);
+
+            let active_messages = active_messages.borrow();
+            for active_message in active_messages.iter() {
+                layout.set_text(&active_message.text);
+                layout.set_font_description(Some(&active_message.font_desc));
+
+                cr.move_to(active_message.current_x, active_message.current_y);
+                pangocairo::functions::layout_path(cr, &layout);
+
+                cr.set_source_color(&active_message.outline_color);
+
+                cr.set_line_width(2.0);
+                cr.set_line_join(gdk::cairo::LineJoin::Round);
+                cr.stroke_preserve().unwrap();
+
+                cr.set_source_color(&active_message.color);
+                cr.fill().unwrap();
+            }
+        }
+    ));
+
+    let last_frame_time = Rc::new(RefCell::new(Option::<i64>::None));
+    drawing_box.add_tick_callback(glib::clone!(
+        #[strong]
+        active_messages,
+        #[strong]
+        last_frame_time,
+        move |area, frame_clock| {
+            let frame_time = frame_clock.frame_time();
+
+            if let Some(prev_time) = *last_frame_time.borrow() {
+                let delta_seconds = (frame_time - prev_time) as f64 / 1000000.0;
+
+                let mut msgs = active_messages.borrow_mut();
+                msgs.retain_mut(|msg| {
+                    let pixels_to_move = msg.speed * delta_seconds;
+                    msg.current_x -= pixels_to_move;
+                    if msg.current_x < -msg.width {
+                        false
+                    } else {
+                        true
+                    }
+                });
+            }
+
+            area.queue_draw();
+
+            *last_frame_time.borrow_mut() = Some(frame_time);
+            gdk::glib::ControlFlow::Continue
+        }
+    ));
 
     glib::MainContext::default().spawn_local(async move {
         while let Some(msg) = rx.recv().await {
@@ -192,7 +207,7 @@ fn activate(application: &gtk4::Application, mut rx: UnboundedReceiver<WebSocket
         }
     });
 
-    window.show();
+    window.present();
 }
 
 fn spawn_websocket_client_thread(tx: UnboundedSender<WebSocketMessage>) {
