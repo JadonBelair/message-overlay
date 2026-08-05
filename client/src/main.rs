@@ -18,7 +18,7 @@ use gtk4::{
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use rand::seq::IndexedRandom;
 use tokio::{
-    sync::mpsc::{self, UnboundedReceiver, UnboundedSender},
+    sync::mpsc::{self, Receiver, Sender},
     time::sleep,
 };
 use tokio_tungstenite::tungstenite::protocol::Message;
@@ -34,10 +34,9 @@ const SIGN_OFFS: &[&'static str] = &[
 ];
 
 struct ScrollingMessage {
-    text: String,
     color: RGBA,
     outline_color: RGBA,
-    font_desc: gdk::pango::FontDescription,
+    layout: gdk::pango::Layout,
     current_x: f64,
     current_y: f64,
     speed: f64,
@@ -75,16 +74,11 @@ impl AppState {
                 cr.paint().unwrap();
                 cr.set_operator(gdk::cairo::Operator::Over);
 
-                let layout = pangocairo::functions::create_layout(cr);
-                layout.set_alignment(gdk::pango::Alignment::Right);
-
                 let active_messages = app_state.active_messages.borrow();
                 for active_message in active_messages.iter() {
-                    layout.set_text(&active_message.text);
-                    layout.set_font_description(Some(&active_message.font_desc));
-
                     cr.move_to(active_message.current_x, active_message.current_y);
-                    pangocairo::functions::layout_path(cr, &layout);
+                    pangocairo::functions::update_layout(cr, &active_message.layout);
+                    pangocairo::functions::layout_path(cr, &active_message.layout);
 
                     cr.set_source_color(&active_message.outline_color);
 
@@ -112,11 +106,7 @@ impl AppState {
                     msgs.retain_mut(|msg| {
                         let pixels_to_move = msg.speed * delta_seconds;
                         msg.current_x -= pixels_to_move;
-                        if msg.current_x < -msg.width {
-                            false
-                        } else {
-                            true
-                        }
+                        msg.current_x >= -msg.width
                     });
                 }
 
@@ -153,15 +143,15 @@ impl AppState {
         let layout = gdk::pango::Layout::new(&pango_ctx);
         layout.set_text(&text);
         layout.set_font_description(Some(&font_desc));
+        layout.set_alignment(gdk::pango::Alignment::Right);
 
         let (width, height) = layout.pixel_size();
         let spawn_y = rand::random_range(10.0..(window_height - height as f64 - 10.0));
 
         self.active_messages.borrow_mut().push(ScrollingMessage {
-            text,
             color,
             outline_color,
-            font_desc,
+            layout,
 
             current_x: window_width,
             current_y: spawn_y,
@@ -172,7 +162,7 @@ impl AppState {
     }
 }
 
-fn activate(application: &gtk4::Application, mut rx: UnboundedReceiver<WebSocketMessage>) {
+fn activate(application: &gtk4::Application, mut rx: Receiver<WebSocketMessage>) {
     let window = gtk4::ApplicationWindow::new(application);
 
     window.init_layer_shell();
@@ -226,7 +216,7 @@ fn activate(application: &gtk4::Application, mut rx: UnboundedReceiver<WebSocket
     window.present();
 }
 
-fn spawn_websocket_client_thread(tx: UnboundedSender<WebSocketMessage>) {
+fn spawn_websocket_client_thread(tx: Sender<WebSocketMessage>) {
     std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
 
@@ -252,7 +242,7 @@ fn spawn_websocket_client_thread(tx: UnboundedSender<WebSocketMessage>) {
                                 Ok(Message::Text(text)) => {
                                     match serde_json::from_str::<WebSocketMessage>(&text) {
                                         Ok(msg) => {
-                                            let _ = tx.send(msg);
+                                            let _ = tx.send(msg).await;
                                         }
                                         Err(_) => {
                                             eprintln!("Received invalid text: {text}");
@@ -288,7 +278,7 @@ fn spawn_websocket_client_thread(tx: UnboundedSender<WebSocketMessage>) {
 fn main() {
     let application = gtk4::Application::new(Some("jadon.message-overlay"), Default::default());
 
-    let (tx, rx) = mpsc::unbounded_channel::<WebSocketMessage>();
+    let (tx, rx) = mpsc::channel::<WebSocketMessage>(100);
 
     // shenanigans needed to pass the receiver to the application
     let rx = Rc::new(RefCell::new(Some(rx)));
