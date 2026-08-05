@@ -6,4 +6,5 @@ pub struct WebSocketMessage {
     pub msg: String,
     pub color: String,
     pub font_size: i32,
+    pub speed: i32,
 }

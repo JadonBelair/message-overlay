@@ -5,7 +5,11 @@ use common::WebSocketMessage;
 use futures_util::StreamExt;
 use gtk4::{
     cairo::Region,
-    gdk::{self, prelude::SurfaceExt, RGBA},
+    gdk::{
+        self,
+        prelude::{GdkCairoContextExt, SurfaceExt},
+        RGBA,
+    },
     gio::prelude::{ApplicationExt, ApplicationExtManual},
     glib,
     prelude::{DrawingAreaExtManual, GtkWindowExt, NativeExt, WidgetExt, WidgetExtManual},
@@ -19,8 +23,6 @@ use tokio::{
 };
 use tokio_tungstenite::tungstenite::protocol::Message;
 
-const SCROLL_SPEED: f64 = 150.0;
-
 const SIGN_OFFS: &[&'static str] = &[
     "Sincerely",
     "Yours truly",
@@ -33,10 +35,12 @@ const SIGN_OFFS: &[&'static str] = &[
 
 struct ScrollingMessage {
     text: String,
-    color: String,
-    font_size: i32,
+    color: RGBA,
+    outline_color: RGBA,
+    font_desc: gdk::pango::FontDescription,
     current_x: f64,
     current_y: f64,
+    speed: f64,
     width: f64,
 }
 
@@ -79,34 +83,42 @@ fn activate(application: &gtk4::Application, mut rx: UnboundedReceiver<WebSocket
         let window_width = drawing_spawn.width() as f64;
         let window_height = drawing_spawn.height() as f64;
 
-        // im just making an assumption that 2x the font size
-        // will be enough for both the message and the sign off
-        let spawn_y =
-            rand::random_range(10.0..(window_height - (msg.font_size as f64 * 2.0) - 10.0));
+        let font_desc =
+            gdk::pango::FontDescription::from_string(&format!("Sans Bold {}", msg.font_size));
 
-        let sign_off = format!(
-            "{}, {}",
+        let color = RGBA::parse(msg.color).unwrap_or(RGBA::BLACK);
+
+        let outline_shade =
+            1.0 - (0.2126 * color.red() + 0.7152 * color.green() + 0.0722 * color.blue()) as f32;
+
+        let outline_color = RGBA::new(outline_shade, outline_shade, outline_shade, 1.0);
+
+        let text = format!(
+            "{}\n{}, {}",
+            msg.msg,
             SIGN_OFFS.choose(&mut rand::rng()).unwrap(),
             msg.name
         );
 
-        let msg_len = if sign_off.len() > msg.msg.len() {
-            sign_off.len()
-        } else {
-            msg.msg.len()
-        } as i32;
+        let pango_ctx = drawing_spawn.pango_context();
+        let layout = gdk::pango::Layout::new(&pango_ctx);
+        layout.set_text(&text);
+        layout.set_font_description(Some(&font_desc));
+
+        let (width, height) = layout.pixel_size();
+        let spawn_y = rand::random_range(10.0..(window_height - height as f64 - 10.0));
 
         active_messages_spawn.borrow_mut().push(ScrollingMessage {
-            // also assuming that the font size will be enough
-            // for the width, with a small bit of padding
-            width: (msg_len * msg.font_size + 10) as f64,
-
-            text: format!("{}\n{}", msg.msg, sign_off),
-            color: msg.color,
-            font_size: msg.font_size,
+            text,
+            color,
+            outline_color,
+            font_desc,
 
             current_x: window_width,
             current_y: spawn_y,
+            speed: msg.speed as f64,
+
+            width: width as f64,
         });
     };
 
@@ -119,41 +131,23 @@ fn activate(application: &gtk4::Application, mut rx: UnboundedReceiver<WebSocket
         cr.paint().unwrap();
 
         let layout = pangocairo::functions::create_layout(cr);
+        layout.set_alignment(gdk::pango::Alignment::Right);
 
         let active_messages = active_messages_draw.borrow();
         for active_message in active_messages.iter() {
             layout.set_text(&active_message.text);
-
-            let font_desc = gdk::pango::FontDescription::from_string(&format!(
-                "Sans Bold {}",
-                active_message.font_size
-            ));
-            layout.set_font_description(Some(&font_desc));
-            layout.set_alignment(gdk::pango::Alignment::Right);
+            layout.set_font_description(Some(&active_message.font_desc));
 
             cr.move_to(active_message.current_x, active_message.current_y);
-
             pangocairo::functions::layout_path(cr, &layout);
 
-            let text_color = RGBA::parse(&active_message.color).unwrap();
-
-            // uses the colors luminance to determine best contrast outline color
-            let outline_shade = 1.0
-                - (0.2126 * text_color.red()
-                    + 0.7152 * text_color.green()
-                    + 0.0722 * text_color.blue()) as f64;
-
-            cr.set_source_rgb(outline_shade, outline_shade, outline_shade);
+            cr.set_source_color(&active_message.outline_color);
 
             cr.set_line_width(2.0);
             cr.set_line_join(gdk::cairo::LineJoin::Round);
             cr.stroke_preserve().unwrap();
 
-            cr.set_source_rgb(
-                text_color.red() as f64,
-                text_color.green() as f64,
-                text_color.blue() as f64,
-            );
+            cr.set_source_color(&active_message.color);
             cr.fill().unwrap();
         }
     });
@@ -165,13 +159,11 @@ fn activate(application: &gtk4::Application, mut rx: UnboundedReceiver<WebSocket
 
         if let Some(prev_time) = *last_frame_time.borrow() {
             let delta_seconds = (frame_time - prev_time) as f64 / 1000000.0;
-            let pixels_to_move = SCROLL_SPEED * delta_seconds;
 
             let mut msgs = active_messages_tick.borrow_mut();
-
             msgs.retain_mut(|msg| {
+                let pixels_to_move = msg.speed * delta_seconds;
                 msg.current_x -= pixels_to_move;
-
                 if msg.current_x < -msg.width {
                     false
                 } else {
