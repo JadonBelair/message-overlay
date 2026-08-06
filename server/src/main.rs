@@ -41,11 +41,6 @@ async fn root() -> Html<&'static str> {
 }
 
 async fn accept_form(State(state): State<AppState>, Form(input): Form<Input>) -> impl IntoResponse {
-    println!(
-        "{} says \"{}\" with hexcode {}",
-        input.name, input.msg, input.color
-    );
-
     if let Ok(json_output) = serde_json::to_string(&input) {
         let _ = state.tx.send(json_output);
     }

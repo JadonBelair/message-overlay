@@ -121,6 +121,7 @@ fn spawn_websocket_client_thread(tx: Sender<WebSocketMessage>) {
                                 Ok(Message::Text(text)) => {
                                     match serde_json::from_str::<WebSocketMessage>(&text) {
                                         Ok(msg) => {
+                                            println!("{:?}", msg);
                                             let _ = tx.send(msg).await;
                                         }
                                         Err(_) => {
